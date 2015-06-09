@@ -15,6 +15,18 @@ from threading import Thread
 from time import sleep
 #import struct
 
+# crazys mods
+import kerberos
+#from protocol import authenticator
+urllib3.disable_warnings()
+#import urllib3.contrib.pyopenssl
+#urllib3.contrib.pyopenssl.inject_into_urllib3()
+ca_certs = "ca-certificates.crt" 
+#ca_certs = "/dev/null" 
+
+# BASIC auth for destination Resource tunnel Script on Webserver
+authheaders = None #urllib3.util.make_headers(basic_auth='georg:crazy')
+
 # Constants
 SOCKTIMEOUT = 5
 RESENDTIMEOUT=300
@@ -100,6 +112,49 @@ class ColoredLogger(logging.Logger):
         self.addHandler(console)
         return
 
+class KerberosTicket:
+    def __init__(self, service):
+        __, krb_context = kerberos.authGSSClientInit(service)
+        kerberos.authGSSClientStep(krb_context, "")
+        self._krb_context = krb_context
+        self.auth_header = ("Negotiate " +
+                            kerberos.authGSSClientResponse(krb_context))
+
+    def verify_response(self, auth_header):
+        # Handle comma-separated lists of authentication fields
+        for field in auth_header.split(","):
+            kind, __, details = field.strip().partition(" ")
+            if kind.lower() == "negotiate":
+                auth_details = details.strip()
+                break
+        else:
+            raise ValueError("Negotiate not found in %s" % auth_header)
+        # Finish the Kerberos handshake
+        krb_context = self._krb_context
+        if krb_context is None:
+            raise RuntimeError("Ticket already used for verification")
+        self._krb_context = None
+        kerberos.authGSSClientStep(krb_context, auth_details)
+        kerberos.authGSSClientClean(krb_context)
+
+def gauthheaders(phost,auth):
+    AH = {}
+    # BASIC auth for destination Resource tunnel Script on Webserver
+    #AH = urllib3.util.make_headers(basic_auth='user:pass')
+    if auth:
+        AH = urllib3.util.make_headers(basic_auth=auth)
+
+    # add proxy auth header
+    if len(phost)>0:
+        try:
+            krb = KerberosTicket("HTTP@" + phost)
+        except kerberos.GSSError,ex:
+            log.error(ex)
+            return AH
+        krbauth_header = {"Proxy-Authorization": krb.auth_header}
+        AH.update(krbauth_header)
+    return AH
+    
 
 logging.setLoggerClass(ColoredLogger)        
 log = logging.getLogger(__name__)
@@ -115,27 +170,61 @@ class RemoteConnectionFailed(Exception):
     pass
 
 class session(Thread):
-    def __init__(self,pSocket,connectString):
+    def __init__(self,pSocket,args):
         Thread.__init__(self)
         self.pSocket = pSocket
-        self.connectString = connectString
-        o = urlparse(connectString)
+        self.proxyString = args.proxy
+        self.connectString = args.url
+        self.auth = args.auth
+        o = urlparse(self.connectString)
         try:
             self.httpPort = o.port
         except:
             if o.scheme == "https":
                 self.httpPort = 443
             else:
-                self.httpPort = 80
+                self.httpPort = 80    
         self.httpScheme = o.scheme
+        try:
+            p = urlparse(self.proxyString)
+            self.proxyHost = p.hostname
+        except:
+            self.proxyHost = None
+        #if not self.proxyString:
+        #    log.info("[noproxy]")
+        self.ssl = -1
         self.httpHost = o.netloc.split(":")[0]
         self.httpPath = o.path
         self.cookie = None
         if o.scheme == "http":
             self.httpScheme = urllib3.HTTPConnectionPool
+            self.ssl = 0
         else:
             self.httpScheme = urllib3.HTTPSConnectionPool
-
+            self.ssl = 1
+                    
+    def gen_krbauthheaders(self):
+        # add proxy auth header
+        if not self.proxyHost:
+			return None
+        try: 
+            krb = KerberosTicket("HTTP@"+self.proxyHost)
+        except kerberos.GSSError,ex:                                                                                                     
+            log.error(ex)
+            return {"Proxy-Authorization":"FAIL"}
+        return {"Proxy-Authorization": krb.auth_header}
+    
+    def gen_authheaders(self):
+        # BASIC auth for destination Resource tunnel Script on Webserver
+        AH = None
+        if self.auth:
+            AH = urllib3.util.make_headers(basic_auth=self.auth)
+        # add proxy auth header
+        if self.proxyHost:
+            krbauth_header = self.gen_krbauthheaders()
+            AH.update(krbauth_header)
+        return AH
+        
     def parseSocks5(self,sock):
         log.debug("SocksVersion5 detected")
         nmethods,methods=(sock.recv(1),sock.recv(1))
@@ -222,12 +311,25 @@ class session(Thread):
 
     def setupRemoteSession(self,target,port):
         headers = {"X-CMD": "CONNECT", "X-TARGET": target, "X-PORT": port}
+        
         self.target = target
         self.port = port
         cookie = None
-        conn = self.httpScheme(host=self.httpHost, port=self.httpPort)
+        if self.proxyString:
+            pheaders = self.gen_krbauthheaders()
+            conn = urllib3.ProxyManager( self.proxyString, proxy_headers=pheaders )
+            self.httpPath = self.connectString
+        else: 
+            if self.ssl == 1:
+                conn = self.httpScheme(host=self.httpHost, port=self.httpPort, ca_certs=ca_certs, cert_reqs='CERT_REQUIRED')
+            else:
+		conn = self.httpScheme(host=self.httpHost, port=self.httpPort)
+        
         #response = conn.request("POST", self.httpPath, params, headers)
-        response = conn.urlopen('POST', self.connectString+"?cmd=connect&target=%s&port=%d" % (target,port), headers=headers, body="")
+		# add
+        authheaders = self.gen_authheaders()
+        headers.update(authheaders)
+        response = conn.urlopen('POST', self.httpPath+"?cmd=connect&target=%s&port=%d" % (target,port), headers=headers, body="")
         if response.status == 200:
             status = response.getheader("x-status")
             if status == "OK":
@@ -239,26 +341,54 @@ class session(Thread):
         else:
             log.error("[%s:%d] HTTP [%d]: [%s]" % (self.target,self.port,response.status,response.getheader("X-ERROR")))
             log.error("[%s:%d] RemoteError: %s" % (self.target,self.port,response.data))
-        conn.close()
+        
+        if isinstance(conn, urllib3.connectionpool.HTTPConnectionPool):
+            conn.close()
         return cookie        
             
     def closeRemoteSession(self):
         headers = {"X-CMD": "DISCONNECT", "Cookie":self.cookie}
         #headers = {"Cookie":self.cookie}
+        authheaders = self.gen_authheaders()
+        headers.update(authheaders)
         params=""
-        conn = self.httpScheme(host=self.httpHost, port=self.httpPort)
+        if self.proxyString:
+            pheaders = self.gen_krbauthheaders()
+            conn = urllib3.ProxyManager(self.proxyString, proxy_headers=pheaders)
+            self.httpPath = self.connectString
+        else: 
+            if self.ssl == 1:
+                conn = self.httpScheme(host=self.httpHost, port=self.httpPort, ca_certs=ca_certs, cert_reqs='CERT_REQUIRED')
+            else:
+			    conn = self.httpScheme(host=self.httpHost, port=self.httpPort)
         response = conn.request("POST", self.httpPath+"?cmd=disconnect", params, headers)
         if response.status == 200:
             log.info("[%s:%d] Connection Terminated" % (self.target,self.port))
-        conn.close()
+        if isinstance(conn, urllib3.connectionpool.HTTPConnectionPool):
+            conn.close()
 
     def reader(self):
-        conn = urllib3.PoolManager()
+        if self.proxyString:
+            conn = urllib3.ProxyManager(self.proxyString, proxy_headers=self.gen_krbauthheaders())
+        else: 
+			conn = urllib3.PoolManager()
+        c = 0
         while True:
             try:
                 if not self.pSocket: break
                 data =""
                 headers = {"X-CMD": "READ", "Cookie": self.cookie, "Connection": "Keep-Alive"}
+                authheaders = self.gen_authheaders()
+                headers.update(authheaders)
+                
+                ### Dirty workaround for https connect connections 100 request per CONNECT then a reauth via fresh kerberos ticket is needed
+                if self.proxyString:
+                    c += 1
+                    if c > 90:
+                        conn = urllib3.ProxyManager(self.proxyString, proxy_headers=self.gen_krbauthheaders())
+                        #conn = urllib3.ProxyManager(self.proxyString, num_pools=1, proxy_headers=self.gen_krbauthheaders())
+                        c = 0                    
+                ###
                 response = conn.urlopen('POST', self.connectString+"?cmd=read", headers=headers, body="")
                 data = None
                 if response.status == 200:
@@ -277,7 +407,7 @@ class session(Thread):
                     else:
                         data = None
                         log.error("[%s:%d] HTTP [%d]: Status: [%s]: Message [%s] Shutting down" % (self.target,self.port,response.status,status,response.getheader("X-ERROR")))
-                else: 
+                else:
                     log.error("[%s:%d] HTTP [%d]: Shutting down" % (self.target,self.port,response.status))
                 if data == None: 
                     # Remote socket closed
@@ -285,10 +415,13 @@ class session(Thread):
                 if len(data) == 0:
                     sleep(0.1)
                     continue
-                transferLog.info("[%s:%d] <<<< [%d]" % (self.target,self.port,len(data)))
+                transferLog.info("[%s:%d] <<<< [%d] [%d]" % (self.target,self.port,len(data),c))
                 self.pSocket.send(data)
             except Exception,ex:
+                log.error("[READER]: %s " % (ex.message))
                 raise ex
+                break
+				
         self.closeRemoteSession()
         log.debug("[%s:%d] Closing localsocket" % (self.target,self.port))
         try:
@@ -298,13 +431,28 @@ class session(Thread):
 
     def writer(self):
         global READBUFSIZE
-        conn = urllib3.PoolManager()
+        if self.proxyString:
+            conn = urllib3.ProxyManager(self.proxyString, proxy_headers=self.gen_krbauthheaders())
+        else:
+			conn = urllib3.PoolManager()
+        c = 0
         while True:
             try:
-                self.pSocket.settimeout(1)
+                ### Dirty workaround for https connect connections 100 request per CONNECT then a reauth via fresh kerberos ticket is needed
+                if self.proxyString:
+                    c += 1
+                    if c > 75:
+                        conn = urllib3.ProxyManager(self.proxyString, proxy_headers=self.gen_krbauthheaders())
+                        #conn = urllib3.ProxyManager(self.proxyString, num_pools=1, proxy_headers=self.gen_krbauthheaders())
+                        c = 0
+                ###
+                self.pSocket.settimeout(0.1)
                 data = self.pSocket.recv(READBUFSIZE)
+                                
                 if not data: break
-                headers = {"X-CMD": "FORWARD", "Cookie": self.cookie,"Content-Type": "application/octet-stream", "Connection":"Keep-Alive"}
+                headers = {"X-CMD": "FORWARD", "Cookie": self.cookie,"Content-Type": "application/octet-stream", "Connection":"Keep-Alive" }
+                authheaders = self.gen_authheaders()
+                headers.update(authheaders)
                 response = conn.urlopen('POST', self.connectString+"?cmd=forward", headers=headers, body=data)
                 if response.status == 200:
                     status = response.getheader("x-status")
@@ -317,10 +465,16 @@ class session(Thread):
                 else: 
                     log.error("[%s:%d] HTTP [%d]: Shutting down" % (self.target,self.port,response.status))
                     break
-                transferLog.info("[%s:%d] >>>> [%d]" % (self.target,self.port,len(data)))
+                transferLog.info("[%s:%d] >>>> [%d] [%d]" % (self.target,self.port,len(data),c))
             except timeout:
                 continue
+            except urllib3.exceptions.MaxRetryError,ex:
+                log.error("[WRITER MaxRetryError]: %s" % (ex.message))
+                if self.proxyString:
+                    conn = urllib3.ProxyManager(self.proxyString, proxy_headers=self.gen_krbauthheaders())
+                    continue
             except Exception,ex:
+                log.error("[WRITER]: %s " % (ex.message))
                 raise ex
                 break
         self.closeRemoteSession()
@@ -333,10 +487,10 @@ class session(Thread):
     def run(self):
         try:
             if self.handleSocks(self.pSocket):
-                log.debug("Staring reader")
+                log.error("Staring reader")
                 r = Thread(target=self.reader, args=())
                 r.start()
-                log.debug("Staring writer")
+                log.error("Staring writer")
                 w = Thread(target=self.writer, args=())
                 w.start()
                 r.join()
@@ -348,11 +502,12 @@ class session(Thread):
             log.error(spi.message)
             self.pSocket.close()
         except Exception, e:
-            log.error(e.message)
+            log.error("Exception (run): " + e.message)
             self.pSocket.close()
 
-def askGeorg(connectString):
-    connectString = connectString
+def askGeorg(args):
+    connectString = args.url
+    proxyString = args.proxy
     o = urlparse(connectString)
     try:
         httpPort = o.port
@@ -364,18 +519,45 @@ def askGeorg(connectString):
     httpScheme = o.scheme
     httpHost = o.netloc.split(":")[0]
     httpPath = o.path
+    try:
+        p = urlparse(proxyString)
+        phost = p.hostname
+    except: 
+        phost = ""
+    
     if o.scheme == "http":
         httpScheme = urllib3.HTTPConnectionPool
+        if proxyString:
+            conn = urllib3.ProxyManager(proxyString, proxy_headers=pheaders)
+            httpPath = connectString
+        else: 
+            conn = httpScheme(host=httpHost, port=httpPort)
     else:
         httpScheme = urllib3.HTTPSConnectionPool
+        if proxyString:
+            pheaders = gauthheaders(phost,args.auth)
+            conn = urllib3.ProxyManager(proxyString, proxy_headers=pheaders)
+            httpPath = connectString
+        else: 
+            conn = httpScheme(host=httpHost, port=httpPort, ca_certs=ca_certs, cert_reqs='CERT_REQUIRED')
     
-    conn = httpScheme(host=httpHost, port=httpPort)
-    response = conn.request("GET", httpPath)
+    # add auth header
+    authheaders = gauthheaders(phost,args.auth)
+    log.info('AUTH: '+ ', '.join("%s=%r" % (key,val) for (key,val) in authheaders.iteritems()))
+    try:
+        response = conn.request("GET", httpPath, headers=authheaders)
+    except urllib3.exceptions.MaxRetryError,e:
+        log.error(e.message)
+        return False
+    except urllib3.exceptions.SSLError,e:
+        log.error("[SSLERROR]: " + e.message)
+    
     if response.status == 200:
         if BASICCHECKSTRING == response.data.strip():
             log.info(BASICCHECKSTRING)
             return True
-    conn.close()
+    if isinstance(conn, urllib3.connectionpool.HTTPConnectionPool):
+		conn.close()
     return False
 
 if __name__ == '__main__':
@@ -400,6 +582,9 @@ if __name__ == '__main__':
     parser.add_argument("-r","--read-buff",metavar="",help="Local read buffer, max data to be sent per POST",type=int,default="1024")
     parser.add_argument("-u","--url",metavar="",required=True,help="The url containing the tunnel script")
     parser.add_argument("-v","--verbose",metavar="",help="Verbose output[INFO|DEBUG]",default="INFO")
+    parser.add_argument("-X","--proxy",metavar="",help="Proxy with Auth Negotiate and CONNECT Support url eg. http://192.168.66.201:8080")
+    parser.add_argument("-A","--authproxy",metavar="",help="Enable Negotiate auth with proxy")
+    parser.add_argument("-a","--auth",metavar="",help="Basic Authentication for access to the tunnel script <user:pass> eg.: georg:georg")
     args = parser.parse_args()
     if (LEVEL.has_key(args.verbose)):
         log.setLevel(LEVEL[args.verbose])
@@ -407,7 +592,7 @@ if __name__ == '__main__':
     
     log.info("Starting socks server [%s:%d], tunnel at [%s]" % (args.listen_on,args.listen_port,args.url))
     log.info("Checking if Georg is ready")
-    if not askGeorg(args.url):
+    if not askGeorg(args):
         log.info("Georg is not ready, please check url")
         exit()
     READBUFSIZE = args.read_buff
@@ -420,9 +605,12 @@ if __name__ == '__main__':
             sock,addr_info=servSock.accept()
             sock.settimeout(SOCKTIMEOUT)
             log.debug("Incomming connection")
-            session(sock,args.url).start()
+            #session(sock,args.url,args.proxy).start()
+            session(sock,args).start()
         except KeyboardInterrupt,ex:
             break
         except Exception,e:
-            log.error(e)
+            log.error("[MAIN]: "+e.message)
     servSock.close()
+
+
