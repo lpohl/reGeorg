@@ -15,7 +15,7 @@ from threading import Thread
 from time import sleep
 #import struct
 
-# crazys mods
+# mods
 import kerberos
 #from protocol import authenticator
 urllib3.disable_warnings()
@@ -25,7 +25,7 @@ ca_certs = "ca-certificates.crt"
 #ca_certs = "/dev/null" 
 
 # BASIC auth for destination Resource tunnel Script on Webserver
-authheaders = None #urllib3.util.make_headers(basic_auth='georg:crazy')
+authheaders = None #urllib3.util.make_headers(basic_auth='user:pass')
 
 # Constants
 SOCKTIMEOUT = 5

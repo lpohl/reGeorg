@@ -27,7 +27,7 @@ Dependencies
 reGeorg requires Python 2.7 (>2.7.5?) and the following modules:
 
 * [urllib3] - HTTP library with thread-safe connection pooling, file post, and more.
-  [kerberos] - KRB5 Library for Negotiate Authentication against a Proxy
+* [kerberos] - KRB5 Library for Negotiate Authentication against a Proxy
  
 
 Usage
