@@ -19,14 +19,15 @@ etienne@sensepost.com / [@kamp_staaldraad]
 Version
 ----
 
-1.0
+1.0a (modifyed by lpohl)
 
 Dependencies
 -----------
 
-reGeorg requires Python 2.7 and the following modules:
+reGeorg requires Python 2.7 (>2.7.5?) and the following modules:
 
 * [urllib3] - HTTP library with thread-safe connection pooling, file post, and more.
+  [kerberos] - KRB5 Library for Negotiate Authentication against a Proxy
  
 
 Usage
@@ -44,6 +45,9 @@ optional arguments:
   -r , --read-buff     Local read buffer, max data to be sent per POST
   -u , --url           The url containing the tunnel script
   -v , --verbose       Verbose output[INFO|DEBUG]
+  -x , --proxy         Set Proxy URL (http://myproxy:8080)
+  -A , --authproxy     Use Kerberos Auth with the Proxy
+  -a , --auth          Use Basic Auth for tunnel Script Access ( -a user:pass)
 
 ```
 
@@ -65,7 +69,11 @@ you started the reGeorgSocksProxy.py
 Example
 ---------
 ```
+Direct HTTP Access to Uploaded Script
 $ python reGeorgSocksProxy.py -p 8080 -u http://upload.sensepost.net:8080/tunnel/tunnel.jsp
+
+Access over Proxy + KRB Auth to HTTPS and Basic Auth Protected tunnel script
+$ python reGeorgSocksProxy.py -u https://upload.sensepost.net/tunnel/tunnel.jsp -x http://proxy.sensepost.net:8080 -A -a user:pass
 ```
 
 License
