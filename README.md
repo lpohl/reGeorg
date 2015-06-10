@@ -34,7 +34,7 @@ Usage
 --------------
 
 ```
-$ reGeorgSocksProxy.py [-h] [-l] [-p] [-r] -u  [-v]
+$ reGeorgSocksProxy.py [-h] [-l] [-p] [-r] -u  [-v] [-X] [-A] [-a]
 
 Socks server for reGeorg HTTP(s) tunneller
 
@@ -45,7 +45,7 @@ optional arguments:
   -r , --read-buff     Local read buffer, max data to be sent per POST
   -u , --url           The url containing the tunnel script
   -v , --verbose       Verbose output[INFO|DEBUG]
-  -x , --proxy         Set Proxy URL (http://myproxy:8080)
+  -X , --proxy         Set Proxy URL (http://myproxy:8080)
   -A , --authproxy     Use Kerberos Auth with the Proxy
   -a , --auth          Use Basic Auth for tunnel Script Access ( -a user:pass)
 
