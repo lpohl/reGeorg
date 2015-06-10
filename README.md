@@ -86,4 +86,5 @@ MIT
 [@trowalts]:http://twitter.com/trowalts
 [@kamp_staaldraad]:http://twitter.com/kamp_staaldraad
 [urllib3]:https://pypi.python.org/pypi/urllib3
+[kerberos]:https://pypi.python.org/pypi/kerberos
 [proxychains]:http://sourceforge.net/projects/proxychains/
