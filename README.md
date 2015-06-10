@@ -24,11 +24,11 @@ Version
 Dependencies
 -----------
 
-reGeorg requires Python 2.7 (>2.7.5?) and the following modules:
+reGeorg requires Python 2.7 and the following modules:
 
 * [urllib3] - HTTP library with thread-safe connection pooling, file post, and more.
 * [kerberos] - KRB5 Library for Negotiate Authentication against a Proxy
- 
+* python > 2.7.5? I had strange problems with the default python (2.7.4) on Kali Linux so I used pyenv and python 2.7.10
 
 Usage
 --------------
