@@ -42,31 +42,31 @@ def www_auth(response):
         auth_fields[kind.lower()] = details.strip()
     return auth_fields
 
-krb = KerberosTicket("HTTP@igor.packetx.de")
+krb = KerberosTicket("HTTP@<fqdn>")
 headers = {"Authorization": krb.auth_header}
 print headers
-r = requests.get("http://igor.packetx.de/krb/BOfH", headers=headers)
+r = requests.get("http://<fqdn>/some/URI", headers=headers)
 print r.status_code
 krb.verify_response(r.headers["www-authenticate"])
 
-#r = requests.get("http://igor.packetx.de/krb/")
+#r = requests.get("http://<fqdn>")
 #print r.status_code
 #print r.headers["www-authenticate"]
 #print www_auth(r)
 
 # Testing
-#r = requests.get("http://igor.packetx.de/ip.php")
-#print "http://igor.packetx.de/ip.php KRB:" 
+#r = requests.get("http://<fqdn>/ip.php")
+#print "http://<fqdn>/ip.php KRB:" 
 #print r.status_code == 401 and www_auth(r).get('negotiate') == ''
-#r = requests.get("http://igor.packetx.de/krb/BOfH")
-#print "http://igor.packetx.de/krb/ KRB:"
+#r = requests.get("http://<fqdn>/some/URI")
+#print "http://<fqdn>/some/ KRB:"
 #print r.status_code == 401 and www_auth(r).get('negotiate') == ''
 
-#__, krb_context = kerberos.authGSSClientInit("HTTP@igor.packetx.de")
+#__, krb_context = kerberos.authGSSClientInit("HTTP@<fqdn>")
 #kerberos.authGSSClientStep(krb_context, "")
 #negotiate_details = kerberos.authGSSClientResponse(krb_context)
 #headers = {"Authorization": "Negotiate " + negotiate_details}
-#r = requests.get("http://igor.packetx.de/krb/BOfH", headers=headers)
+#r = requests.get("http://<fqdn>/some/URI", headers=headers)
 #print r.status_code
 #print r
 
